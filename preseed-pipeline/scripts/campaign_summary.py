@@ -69,6 +69,7 @@ def main() -> int:
             "pipeline.csv not found",
             field=str(PIPELINE_CSV),
             fix="Run /preseed-campaign setup to initialize pipeline files.",
+            code=2,
         )
 
     pipeline = read_csv(PIPELINE_CSV)
