@@ -17,3 +17,13 @@ feedback.json
 .env
 .env.local
 *.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Pre-seed fundraising workspace (sensitive — never commit investor data)
+fundraising/
+voice/samples/
