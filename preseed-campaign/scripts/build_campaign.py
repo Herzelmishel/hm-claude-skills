@@ -21,7 +21,7 @@ import json
 import re
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -240,7 +240,7 @@ def write_campaign_yaml(root: Path, force: bool) -> Path:
     if path.exists() and not force:
         return path
     content = CAMPAIGN_YAML_TEMPLATE.format(
-        setup_date=datetime.utcnow().strftime("%Y-%m-%d")
+        setup_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
     )
     path.write_text(content, encoding="utf-8")
     return path
@@ -322,7 +322,7 @@ def write_getting_started(root: Path, force: bool) -> Path:
     if path.exists() and not force:
         return path
     content = GETTING_STARTED_TEMPLATE.format(
-        generated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     )
     path.write_text(content, encoding="utf-8")
     return path

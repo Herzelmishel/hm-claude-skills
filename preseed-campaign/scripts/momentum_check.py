@@ -28,7 +28,7 @@ import csv
 import json
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 
@@ -207,6 +207,17 @@ def parse_money(s: str | None) -> float:
 # ---------------------------------------------------------------------------
 
 def compute_momentum_score(touches: list[dict], today: date) -> int:
+    """Compute a 0-100 momentum score from the last 7 days of touches.
+
+    Each component contribution is clamped to its weight cap, so the
+    presence of a single signal of each kind gives a perfect 100:
+
+        score = min(commits, 1) * 40
+              + min(replies, 1) * 30
+              + min(calls,   1) * 30
+
+    A "call" is any of intro_call_booked or partner_meeting_booked.
+    """
     seven_days_ago = today - timedelta(days=7)
     commits = 0
     replies = 0
@@ -220,9 +231,9 @@ def compute_momentum_score(touches: list[dict], today: date) -> int:
             commits += 1
         elif status_after.startswith("replied_positive"):
             replies += 1
-        elif status_after == "intro_call_booked":
+        elif status_after in {"intro_call_booked", "partner_meeting_booked"}:
             calls += 1
-    score = (commits * 40) + (replies * 30) + (calls * 30)
+    score = min(commits, 1) * 40 + min(replies, 1) * 30 + min(calls, 1) * 30
     return min(100, score)
 
 

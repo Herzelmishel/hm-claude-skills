@@ -29,9 +29,10 @@ COMMITMENTS_CSV = FUNDRAISING / "pipeline" / "commitments.csv"
 SUMMARY_MD = FUNDRAISING / "pipeline" / "weekly-summary.md"
 
 
-def emit_error(message: str, field: str, fix: str) -> int:
+# Exit codes: 1 validation, 2 missing input, 3 dependency, 4 unsafe.
+def emit_error(message: str, field: str, fix: str, code: int = 1) -> int:
     print(json.dumps({"error": message, "field": field, "fix": fix}))
-    return 1
+    return code
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:

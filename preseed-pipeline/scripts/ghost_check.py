@@ -40,10 +40,31 @@ POST_MEETING_STATUSES = {
 }
 GHOST_THRESHOLD_DAYS = 14
 
+# Touches that count as a real response signal from the investor.
+# Founder-initiated outreach (e.g., another follow-up DM) does NOT reset the
+# ghost timer — only inbound replies and material engagement do. This guards
+# against the failure mode where a founder's nudge silently extends the
+# silence window.
+RESPONSE_TOUCH_TYPES = {
+    # Investor replied in some form.
+    "replied",
+    "replied_positive",
+    "replied_neutral",
+    "replied_negative",
+}
+RESPONSE_MATERIAL_INTERACTIONS = {
+    # Material engagement signals genuine interest.
+    "deck_viewed",
+    "data_room_accessed",
+    "demo_watched",
+    "financials_requested",
+}
 
-def emit_error(message: str, field: str, fix: str) -> int:
+
+# Exit codes: 1 validation, 2 missing input, 3 dependency, 4 unsafe.
+def emit_error(message: str, field: str, fix: str, code: int = 1) -> int:
     print(json.dumps({"error": message, "field": field, "fix": fix}))
-    return 1
+    return code
 
 
 def parse_iso(value: str) -> date | None:
@@ -61,6 +82,21 @@ def slugify(value: str) -> str:
     value = re.sub(r"[^a-z0-9]+", "-", value)
     return value.strip("-") or "investor"
 
+
+
+def sanitize_cell(value) -> str:
+    """Defuse CSV/spreadsheet formula injection.
+
+    Cells starting with =, +, -, @, tab, or carriage return are
+    interpreted as formulas by Excel/Sheets/HeyReach. Prefix a single
+    quote so they're treated as text.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s
 
 def load_voice_register() -> str:
     if not VOICE_YAML.exists():
@@ -144,7 +180,16 @@ def main() -> int:
     today_iso = today.isoformat()
     register = load_voice_register()
 
-    # --- Read touches; build per-investor latest-touch map.
+    # --- Read touches; build per-investor latest *response* touch map.
+    # Fix: Only inbound-equivalent signals reset the silence timer. A founder-
+    # initiated DM (e.g., another follow-up from us) must NOT count as a
+    # response — otherwise the ghost timer never fires for the very investors
+    # we're trying to flush. We accept two kinds of response evidence:
+    #   1. status_after is an investor reply (replied, replied_positive, ...)
+    #   2. material_interaction is an engagement signal (deck_viewed,
+    #      data_room_accessed, demo_watched, financials_requested)
+    # Everything else (our outbound DMs, our takeaway sends, our warm updates)
+    # does not reset the clock.
     latest_touch: dict[str, date] = {}
     if TOUCHES_CSV.exists():
         try:
@@ -153,6 +198,14 @@ def main() -> int:
                     iid = (row.get("investor_id") or "").strip()
                     td = parse_iso(row.get("touch_date") or "")
                     if not iid or not td:
+                        continue
+                    status_after = (row.get("status_after") or "").strip()
+                    material = (row.get("material_interaction") or "").strip()
+                    is_response = (
+                        status_after in RESPONSE_TOUCH_TYPES
+                        or material in RESPONSE_MATERIAL_INTERACTIONS
+                    )
+                    if not is_response:
                         continue
                     if iid not in latest_touch or td > latest_touch[iid]:
                         latest_touch[iid] = td
@@ -197,7 +250,9 @@ def main() -> int:
             anchor = last_touch
 
         days_silent = (today - anchor).days
-        if days_silent <= GHOST_THRESHOLD_DAYS:
+        # Plan says "14+ days = ghosted" — day 14 must trigger. Use strict
+        # less-than so day 14 fires; previously `<=` skipped day 14.
+        if days_silent < GHOST_THRESHOLD_DAYS:
             continue
 
         # Avoid re-flagging if already ghosted
@@ -236,7 +291,7 @@ def main() -> int:
                 writer = csv.DictWriter(handle, fieldnames=fieldnames)
                 writer.writeheader()
                 for row in rows:
-                    writer.writerow({key: row.get(key, "") for key in fieldnames})
+                    writer.writerow({key: sanitize_cell(row.get(key, "")) for key in fieldnames})
         except OSError as exc:
             return emit_error(
                 f"Failed to write pipeline.csv: {exc}",

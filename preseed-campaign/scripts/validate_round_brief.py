@@ -97,94 +97,203 @@ def _coerce_scalar(raw: str):
     return raw
 
 
-def _load_yaml_minimal(text: str) -> dict:
-    """Tiny indent-based YAML parser sufficient for round-brief.yaml."""
-    lines = text.splitlines()
-    # strip comments / blank lines but remember original indices
-    cleaned = []
-    for idx, raw in enumerate(lines):
-        stripped = raw.split("#", 1)[0].rstrip() if "#" in raw else raw.rstrip()
-        if stripped.strip() == "":
-            continue
-        cleaned.append((idx, stripped))
+BLOCK_SCALAR_INDICATORS = {"|", "|-", "|+", ">", ">-", ">+"}
 
-    data: dict = {}
-    i = 0
+
+def _consume_block_scalar(
+    raw_lines: list[str],
+    start: int,
+    key_indent: int,
+    indicator: str,
+) -> tuple[str, int]:
+    """Consume a block scalar starting at line `start`.
+
+    Returns (value, next_index_into_raw_lines). Includes lines with indent
+    strictly greater than `key_indent`. Blank lines are preserved as empty
+    lines for literal '|' style; folded '>' style joins on spaces with
+    blanks acting as paragraph breaks.
+    """
+    folded = indicator.startswith(">")
+    chomp = indicator[-1] if len(indicator) > 1 and indicator[-1] in {"-", "+"} else ""
+    block_lines: list[str] = []
+    j = start
+    block_indent: int | None = None
+    while j < len(raw_lines):
+        raw = raw_lines[j]
+        # blank line — keep going (it belongs to the block)
+        if raw.strip() == "":
+            block_lines.append("")
+            j += 1
+            continue
+        cur_indent = len(raw) - len(raw.lstrip(" "))
+        if cur_indent <= key_indent:
+            break
+        if block_indent is None:
+            block_indent = cur_indent
+        # Strip the block's base indentation
+        strip_n = min(block_indent, cur_indent)
+        block_lines.append(raw[strip_n:].rstrip("\r"))
+        j += 1
+    # Trim trailing empty lines according to chomping indicator
+    while block_lines and block_lines[-1] == "":
+        if chomp == "+":
+            break
+        block_lines.pop()
+    if folded:
+        # Folded: blanks are paragraph breaks (single newline), single newlines
+        # become spaces.
+        out_parts: list[str] = []
+        buf: list[str] = []
+        for line in block_lines:
+            if line == "":
+                if buf:
+                    out_parts.append(" ".join(buf))
+                    buf = []
+                out_parts.append("")
+            else:
+                buf.append(line)
+        if buf:
+            out_parts.append(" ".join(buf))
+        # Join paragraphs with newline; collapse runs of empties into a single \n
+        value = "\n".join(out_parts)
+        # Add a trailing newline for clip/keep
+        if chomp != "-":
+            value += "\n"
+    else:
+        value = "\n".join(block_lines)
+        if chomp != "-":
+            value += "\n"
+    return value, j
+
+
+def _load_yaml_minimal(text: str) -> dict:
+    """Tiny indent-based YAML parser sufficient for round-brief.yaml.
+
+    Handles block scalars (|, |-, |+, >, >-, >+) by consuming all lines
+    indented deeper than the key, preserving content rather than merging
+    it into following keys.
+    """
+    raw_lines = text.splitlines()
 
     def indent_of(s: str) -> int:
         return len(s) - len(s.lstrip(" "))
 
+    def is_blank_or_comment(s: str) -> bool:
+        st = s.lstrip()
+        return st == "" or st.startswith("#")
+
+    def strip_inline_comment(s: str) -> str:
+        # strip only inline (not in-string) comments — naive but matches input shape
+        if "#" not in s:
+            return s
+        # heuristic: only strip if not within quotes
+        in_s = False
+        quote = ""
+        out = []
+        for ch in s:
+            if in_s:
+                if ch == quote:
+                    in_s = False
+                out.append(ch)
+            else:
+                if ch in ("'", '"'):
+                    in_s = True
+                    quote = ch
+                    out.append(ch)
+                elif ch == "#":
+                    break
+                else:
+                    out.append(ch)
+        return "".join(out).rstrip()
+
     def parse_block(start: int, base_indent: int) -> tuple:
-        """Return (value, next_index). value is dict, list, or string."""
-        # detect list vs map by first child line
-        if start >= len(cleaned):
-            return None, start
-        idx, line = cleaned[start]
-        if indent_of(line) <= base_indent:
-            return None, start
-        if line.lstrip().startswith("- "):
+        """Return (value, next_raw_index). value is dict, list, or string."""
+        # Find first non-blank/non-comment line
+        j = start
+        while j < len(raw_lines) and is_blank_or_comment(raw_lines[j]):
+            j += 1
+        if j >= len(raw_lines):
+            return None, j
+        first = raw_lines[j]
+        if indent_of(first) <= base_indent:
+            return None, j
+        # List?
+        if first.lstrip().startswith("- "):
             items = []
-            j = start
-            while j < len(cleaned):
-                _, l = cleaned[j]
-                if indent_of(l) <= base_indent:
+            while j < len(raw_lines):
+                if is_blank_or_comment(raw_lines[j]):
+                    j += 1
+                    continue
+                line = raw_lines[j]
+                if indent_of(line) <= base_indent:
                     break
-                if not l.lstrip().startswith("- "):
+                stripped = strip_inline_comment(line).rstrip()
+                if not stripped.lstrip().startswith("- "):
                     break
-                item = l.lstrip()[2:].strip()
+                item = stripped.lstrip()[2:].strip()
                 items.append(_coerce_scalar(item))
                 j += 1
             return items, j
-        # nested map
+        # Nested map
         sub: dict = {}
-        j = start
-        while j < len(cleaned):
-            _, l = cleaned[j]
-            ind = indent_of(l)
+        while j < len(raw_lines):
+            if is_blank_or_comment(raw_lines[j]):
+                j += 1
+                continue
+            line = raw_lines[j]
+            ind = indent_of(line)
             if ind <= base_indent:
                 break
-            stripped_line = l.strip()
+            stripped_line = strip_inline_comment(line).rstrip().strip()
             if ":" not in stripped_line:
-                # treat as block scalar continuation — append to last key
-                if sub:
-                    last_key = list(sub.keys())[-1]
-                    if isinstance(sub[last_key], str):
-                        sub[last_key] += " " + stripped_line
+                # Should not happen for well-formed YAML at this level; skip.
                 j += 1
                 continue
             key, _, rest = stripped_line.partition(":")
             key = key.strip()
             rest = rest.strip()
-            if rest == "" or rest == "|" or rest == ">":
+            if rest in BLOCK_SCALAR_INDICATORS:
+                value, j2 = _consume_block_scalar(raw_lines, j + 1, ind, rest)
+                sub[key] = value
+                j = j2
+            elif rest == "":
                 child, j2 = parse_block(j + 1, ind)
-                if child is None:
-                    sub[key] = ""
-                else:
-                    sub[key] = child
+                sub[key] = child if child is not None else ""
                 j = j2
             else:
                 sub[key] = _coerce_scalar(rest)
                 j += 1
         return sub, j
 
-    while i < len(cleaned):
-        _, line = cleaned[i]
+    data: dict = {}
+    i = 0
+    while i < len(raw_lines):
+        if is_blank_or_comment(raw_lines[i]):
+            i += 1
+            continue
+        line = raw_lines[i]
         ind = indent_of(line)
-        stripped = line.strip()
-        if ind != 0 or ":" not in stripped:
+        if ind != 0:
+            i += 1
+            continue
+        stripped = strip_inline_comment(line).rstrip().strip()
+        if ":" not in stripped:
             i += 1
             continue
         key, _, rest = stripped.partition(":")
         key = key.strip()
         rest = rest.strip()
-        if rest in {"", "|", ">"}:
+        if rest in BLOCK_SCALAR_INDICATORS:
+            value, j = _consume_block_scalar(raw_lines, i + 1, 0, rest)
+            data[key] = value
+            i = j
+        elif rest == "":
             value, j = parse_block(i + 1, 0)
             data[key] = value if value is not None else ""
             i = j
         else:
             data[key] = _coerce_scalar(rest)
             i += 1
-
     return data
 
 

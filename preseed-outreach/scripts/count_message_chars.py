@@ -46,6 +46,21 @@ def count_words(text: str) -> int:
     # Treat any whitespace-separated run as one word.
     return len(re.findall(r"\S+", text))
 
+def sanitize_cell(value) -> str:
+    """Defuse CSV/spreadsheet formula injection.
+
+    Cells starting with =, +, -, @, tab, or carriage return are
+    interpreted as formulas by Excel/Sheets/HeyReach. Prefix a single
+    quote so they're treated as text.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s
+
+
 
 def main() -> int:
     if not OUTREACH_CSV.exists():
@@ -149,7 +164,7 @@ def main() -> int:
             writer.writeheader()
             for row in rows:
                 row.setdefault("char_count_connection_note", "")
-                writer.writerow(row)
+                writer.writerow({k: sanitize_cell(row.get(k, "")) for k in fieldnames})
     except OSError as exc:
         emit_error(
             f"Failed to write outreach.csv: {exc}",

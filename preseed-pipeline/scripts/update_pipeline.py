@@ -66,9 +66,26 @@ STATUS_TO_TOUCH_TYPE = {
 }
 
 
-def emit_error(message: str, field: str, fix: str) -> int:
+# Exit-code conventions (per skill spec):
+#   1 validation, 2 missing input, 3 dependency, 4 unsafe/integrity violation
+def emit_error(message: str, field: str, fix: str, code: int = 1) -> int:
     print(json.dumps({"error": message, "field": field, "fix": fix}))
-    return 1
+    return code
+
+
+def sanitize_cell(value) -> str:
+    """Defuse CSV/spreadsheet formula injection.
+
+    HeyReach and other tools open exported CSV in Excel/Sheets, which
+    interprets cells starting with =, +, -, @, tab, or carriage return as
+    formulas. Prefix a single quote so the cell is treated as text.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,7 +103,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_statuses() -> list[str]:
-    """Parse vocabulary.yaml statuses section without a YAML library."""
+    """Parse vocabulary.yaml statuses section without a YAML library.
+
+    Section terminates only when a top-level key (letter at column 0
+    followed by ':') appears. Blank lines and comments (lines starting
+    with '#') are skipped.
+    """
     if not VOCAB_YAML.exists():
         return []
     statuses: list[str] = []
@@ -100,6 +122,9 @@ def load_statuses() -> list[str]:
             if in_section:
                 if not stripped:
                     continue
+                if stripped.startswith("#"):
+                    # Comment line — skip; do not terminate section.
+                    continue
                 if stripped.startswith("- "):
                     value = stripped[2:].split("#", 1)[0]
                     value = value.split("←", 1)[0]
@@ -109,8 +134,10 @@ def load_statuses() -> list[str]:
                         if token:
                             statuses.append(token)
                     continue
-                if not raw.startswith((" ", "\t", "-")):
+                # Only a top-level key (letter at col 0, has ':') terminates.
+                if raw and raw[0].isalpha() and ":" in raw:
                     break
+                # Otherwise (indented continuation, etc.) keep scanning.
     except OSError:
         return []
     return statuses
@@ -127,24 +154,79 @@ def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: row.get(key, "") for key in fieldnames})
+            writer.writerow(
+                {key: sanitize_cell(row.get(key, "")) for key in fieldnames}
+            )
 
 
 def append_touch(
     fieldnames: list[str],
     row: dict[str, str],
 ) -> None:
+    """Append a touch row, validating the existing header first.
+
+    csv.DictWriter writes columns in the writer's declared order — if the
+    on-disk header has drifted (manual edit, schema change), naive append
+    silently misaligns rows. Read the existing header first; if the file
+    has data rows, require the script's fieldnames to be a subset of the
+    on-disk header and use the on-disk order so we never reorder columns
+    under the user's feet. If the file is missing, empty, or header-only,
+    (re)write the canonical header and the row.
+    """
     file_exists = TOUCHES_CSV.exists()
-    if not file_exists:
-        # Initialize with the supplied fieldnames if file missing.
+    existing_header: list[str] | None = None
+    has_rows = False
+
+    if file_exists:
+        with TOUCHES_CSV.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            try:
+                existing_header = next(reader)
+            except StopIteration:
+                existing_header = None
+            else:
+                # Detect at least one data row beyond the header.
+                for _ in reader:
+                    has_rows = True
+                    break
+
+    if not file_exists or existing_header is None or not has_rows:
+        # File missing OR empty OR header-only → (re)initialize with our
+        # canonical fieldnames, then write the row.
         with TOUCHES_CSV.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerow({key: row.get(key, "") for key in fieldnames})
+            writer.writerow(
+                {key: sanitize_cell(row.get(key, "")) for key in fieldnames}
+            )
         return
+
+    # Existing header with data rows — must contain every column the script
+    # expects to write. Otherwise refuse (integrity violation, exit code 4).
+    missing = [f for f in fieldnames if f not in existing_header]
+    if missing:
+        print(
+            json.dumps(
+                {
+                    "error": "touches.csv header mismatch",
+                    "field": "header",
+                    "fix": (
+                        f"Existing header is {existing_header}, script "
+                        f"expects {fieldnames}. Manually align or delete "
+                        "touches.csv to recreate."
+                    ),
+                }
+            )
+        )
+        sys.exit(4)
+
+    # Use the on-disk header order so we never reorder columns under the
+    # user's feet. Any extra on-disk columns (forward-compat) get blanks.
     with TOUCHES_CSV.open("a", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writerow({key: row.get(key, "") for key in fieldnames})
+        writer = csv.DictWriter(handle, fieldnames=existing_header)
+        writer.writerow(
+            {key: sanitize_cell(row.get(key, "")) for key in existing_header}
+        )
 
 
 def main() -> int:
@@ -155,12 +237,14 @@ def main() -> int:
             "pipeline.csv not found",
             field=str(PIPELINE_CSV),
             fix="Run /preseed-campaign setup to initialize pipeline files.",
+            code=2,
         )
     if not VOCAB_YAML.exists():
         return emit_error(
             "vocabulary.yaml not found",
             field=str(VOCAB_YAML),
             fix="Run /preseed-campaign setup to seed ~/fundraising/.sys/.",
+            code=2,
         )
 
     statuses = load_statuses()

@@ -33,9 +33,10 @@ OUTREACH_DIR = FUNDRAISING / "outreach"
 VOICE_YAML = FUNDRAISING / "voice" / "voice-fingerprint.yaml"
 
 
-def emit_error(message: str, field: str, fix: str) -> int:
+# Exit codes: 1 validation, 2 missing input, 3 dependency, 4 unsafe.
+def emit_error(message: str, field: str, fix: str, code: int = 1) -> int:
     print(json.dumps({"error": message, "field": field, "fix": fix}))
-    return 1
+    return code
 
 
 def slugify(value: str) -> str:

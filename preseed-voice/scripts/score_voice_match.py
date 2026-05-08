@@ -10,6 +10,9 @@ sub-scores:
   banned_phrase_check      0 hard if any banned phrase is present, else 1
   em_dash_match            penalty if em-dash use deviates >0.3 from fp
 
+Banned phrases are a HARD veto: any banned-phrase hit caps the final
+composite at 0.3 regardless of how the other dimensions score.
+
 Output (stdout, JSON):
   {
     "voice_score": 0.78,
@@ -149,10 +152,71 @@ WORD_RE = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 
 
 def split_sentences(text: str) -> list[str]:
-    text = re.sub(r"\s+", " ", text).strip()
+    """Split text into sentences with extra fallbacks for short messages.
+
+    Beyond the default terminator+space+capital rule, also split on:
+      - paragraph breaks (\n\n) and single \n followed by a capital
+      - em-dashes preceded by 5+ words on the left side
+      - if the result is still 1 sentence and the message has > 25 words,
+        split on the longest pause character (em-dash, semicolon, or
+        comma followed by a capital)
+    """
     if not text:
         return []
-    return [s.strip() for s in SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    raw = text
+
+    # First split on paragraph breaks: \n\n always splits; single \n
+    # splits when followed by a capital.
+    parts: list[str] = re.split(r"\n\s*\n+", raw)
+    refined: list[str] = []
+    for part in parts:
+        # split on \n + capital
+        sub = re.split(r"\n(?=[A-Z\"'(])", part)
+        refined.extend(sub)
+
+    # Apply default terminator+space+capital rule across each chunk
+    refined2: list[str] = []
+    for chunk in refined:
+        chunk = re.sub(r"[ \t]+", " ", chunk).strip()
+        if not chunk:
+            continue
+        for s in SENTENCE_SPLIT_RE.split(chunk):
+            s = s.strip()
+            if s:
+                refined2.append(s)
+
+    # Em-dash split when there are 5+ words on the left side
+    refined3: list[str] = []
+    for s in refined2:
+        # repeatedly split off leading clause if rule satisfied
+        remaining = s
+        while True:
+            m = re.search(r"\s—\s|\s--\s", remaining)
+            if not m:
+                break
+            left = remaining[: m.start()]
+            right = remaining[m.end():]
+            if len(WORD_RE.findall(left)) >= 5 and right.strip():
+                refined3.append(left.strip())
+                remaining = right.strip()
+                continue
+            break
+        if remaining.strip():
+            refined3.append(remaining.strip())
+
+    # Final fallback: still 1 sentence and > 25 words → split on longest pause
+    if len(refined3) <= 1 and refined3:
+        only = refined3[0]
+        if len(WORD_RE.findall(only)) > 25:
+            # Try em-dash, then semicolon, then comma+capital
+            split_re = re.compile(
+                r"\s—\s|\s--\s|;\s+|,\s+(?=[A-Z])"
+            )
+            pieces = [p.strip() for p in split_re.split(only) if p.strip()]
+            if len(pieces) > 1:
+                refined3 = pieces
+
+    return refined3
 
 
 def word_count(text: str) -> int:
@@ -267,14 +331,18 @@ def compute_voice_score(message: str, fp: dict) -> dict:
     s_banned, issues_banned = score_banned_phrases(message, banned)
     s_em, issue_em = score_em_dash(message, em_target)
 
-    # banned phrases are a hard veto: if score is 0, composite is at most 0.3
-    # (so that the message still surfaces a numeric hint of why)
     composite = (
         s_len * WEIGHTS["sentence_length"]
         + s_open * WEIGHTS["opener"]
         + s_banned * WEIGHTS["banned_phrase"]
         + s_em * WEIGHTS["em_dash"]
     )
+
+    # Banned phrases are a HARD veto: any banned-phrase hit caps the
+    # composite at 0.3 so the message still surfaces a numeric hint of why
+    # but never crosses the review threshold.
+    if s_banned == 0.0:
+        composite = min(composite, 0.3)
 
     issues: list[str] = []
     if issue_len:

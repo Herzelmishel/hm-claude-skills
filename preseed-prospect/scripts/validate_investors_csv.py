@@ -54,9 +54,10 @@ DEFAULT_REQUIRED_FIELDS = [
 HEYREACH_REQUIRED = ["first_name", "last_name", "linkedin_profile_url"]
 
 
-def fail(error: str, field: str = "", fix: str = "") -> None:
+# Exit codes: 1 validation, 2 missing input, 3 dependency, 4 unsafe.
+def fail(error: str, field: str = "", fix: str = "", code: int = 1) -> None:
     print(json.dumps({"error": error, "field": field, "fix": fix}))
-    sys.exit(1)
+    sys.exit(code)
 
 
 def load_yaml_lists(path: Path) -> dict[str, list[str]]:

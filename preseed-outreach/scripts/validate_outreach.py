@@ -54,14 +54,39 @@ MESSAGE_FIELDS = (
 
 VOICE_THRESHOLD = 0.7
 
+# Length limits — enforced here so users running only the validator
+# cannot ship oversize messages.
+LENGTH_LIMITS = {
+    "connection_note": ("chars", 200),
+    "warm_update": ("words", 150),
+    "takeaway_email": ("words", 80),
+}
 
-def emit_error(message: str, field: str, fix: str) -> int:
+
+def _count_chars(text: str) -> int:
+    # len() on a Python str counts unicode codepoints — what the platform
+    # treats as "characters" for limit purposes.
+    return len(text or "")
+
+
+def _count_words(text: str) -> int:
+    if not text:
+        return 0
+    return len(re.findall(r"\S+", text))
+
+
+# Exit codes: 1 validation, 2 missing input, 3 dependency, 4 unsafe.
+def emit_error(message: str, field: str, fix: str, code: int = 1) -> int:
     print(json.dumps({"error": message, "field": field, "fix": fix}))
-    return 1
+    return code
 
 
 def load_ask_stages() -> list[str]:
-    """Parse the ask_stages list from vocabulary.yaml without a YAML library."""
+    """Parse the ask_stages list from vocabulary.yaml without a YAML library.
+
+    Only top-level keys (letter at column 0 followed by ':') terminate the
+    section. Blank lines and comments (lines starting with '#') are skipped.
+    """
     if not VOCAB_YAML.exists():
         return []
     stages: list[str] = []
@@ -75,6 +100,9 @@ def load_ask_stages() -> list[str]:
             if in_section:
                 if not stripped:
                     continue
+                if stripped.startswith("#"):
+                    # Comment — skip; do not terminate.
+                    continue
                 if stripped.startswith("- "):
                     # Strip optional comment after the value.
                     value = stripped[2:].split("#", 1)[0].strip()
@@ -83,8 +111,8 @@ def load_ask_stages() -> list[str]:
                     if value:
                         stages.append(value)
                     continue
-                # First non-list, non-blank line ends the section.
-                if not raw.startswith((" ", "\t", "-")):
+                # Only a top-level key terminates the section.
+                if raw and raw[0].isalpha() and ":" in raw:
                     break
     except OSError:
         return []
@@ -243,6 +271,22 @@ def validate_row(
             "must trace to a public URL already in investors.csv.",
         )
 
+    # (f) Length limits — fail on first violation.
+    for field, (unit, limit) in LENGTH_LIMITS.items():
+        text = row.get(field) or ""
+        if not text.strip():
+            continue
+        actual = _count_chars(text) if unit == "chars" else _count_words(text)
+        if actual > limit:
+            return (
+                f"{field} on row {row_index} exceeds limit: "
+                f"{actual} {unit} (limit {limit}).",
+                f"{field} (row {row_index})",
+                f"Tighten the {field} for investor {investor_id} to "
+                f"≤{limit} {unit}. Run count_message_chars.py to "
+                "double-check; LinkedIn enforces 200-char connection notes.",
+            )
+
     return None
 
 
@@ -252,12 +296,14 @@ def main() -> int:
             "outreach.csv not found",
             field=str(OUTREACH_CSV),
             fix="Run /preseed-outreach to generate the first message set.",
+            code=2,
         )
     if not VOCAB_YAML.exists():
         return emit_error(
             "vocabulary.yaml not found",
             field=str(VOCAB_YAML),
             fix="Run /preseed-campaign setup to seed ~/fundraising/.sys/.",
+            code=2,
         )
 
     ask_stages = load_ask_stages()

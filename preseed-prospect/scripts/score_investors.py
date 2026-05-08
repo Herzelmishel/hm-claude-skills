@@ -39,11 +39,12 @@ WEIGHTS = {
 MAX_CONFLICT_PENALTY = 25
 
 
-def fail(error: str, field: str = "", fix: str = "") -> None:
-    """Emit shared error envelope and exit 1."""
+# Exit codes: 1 validation, 2 missing input, 3 dependency, 4 unsafe.
+def fail(error: str, field: str = "", fix: str = "", code: int = 1) -> None:
+    """Emit shared error envelope and exit with given code."""
     envelope = {"error": error, "field": field, "fix": fix}
     print(json.dumps(envelope))
-    sys.exit(1)
+    sys.exit(code)
 
 
 def parse_int(value: str, default: int = 0) -> int:
@@ -72,6 +73,21 @@ def conflict_penalty(severity: str) -> int:
 
 def truthy(v: str) -> bool:
     return (v or "").strip().lower() in {"yes", "true", "1", "y"}
+
+def sanitize_cell(value) -> str:
+    """Defuse CSV/spreadsheet formula injection.
+
+    Cells starting with =, +, -, @, tab, or carriage return are
+    interpreted as formulas by Excel/Sheets/HeyReach. Prefix a single
+    quote so they're treated as text.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s
+
 
 
 def score_row(row: dict, row_num: int) -> tuple[int, int]:
@@ -181,7 +197,7 @@ def main() -> None:
             # Backfill any missing keys to avoid DictWriter ValueError
             for col in fieldnames:
                 row.setdefault(col, "")
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
+            writer.writerow({k: sanitize_cell(row.get(k, "")) for k in fieldnames})
     tmp_path.replace(CSV_PATH)
 
     summary = {

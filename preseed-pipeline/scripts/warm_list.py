@@ -30,9 +30,10 @@ PIPELINE_CSV = FUNDRAISING / "pipeline" / "pipeline.csv"
 WARM_LIST_MD = FUNDRAISING / "pipeline" / "warm-list.md"
 
 
-def emit_error(message: str, field: str, fix: str) -> int:
+# Exit codes: 1 validation, 2 missing input, 3 dependency, 4 unsafe.
+def emit_error(message: str, field: str, fix: str, code: int = 1) -> int:
     print(json.dumps({"error": message, "field": field, "fix": fix}))
-    return 1
+    return code
 
 
 def parse_iso(value: str) -> date | None:
