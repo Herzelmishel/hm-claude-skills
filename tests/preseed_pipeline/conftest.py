@@ -19,7 +19,7 @@ from textwrap import dedent
 import pytest
 
 
-SCRIPTS_DIR = Path.home() / ".claude" / "skills" / "preseed-pipeline" / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "preseed-pipeline" / "scripts"
 
 
 # --------------------------------------------------------------------------

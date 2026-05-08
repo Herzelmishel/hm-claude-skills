@@ -282,7 +282,10 @@ def test_voice_missing_uses_fallback_comment(
 # Misc
 # --------------------------------------------------------------------------
 def test_missing_pipeline_csv_emits_error_envelope(tmp_workspace, run_script):
-    """Spec: missing-input should be exit 2; current script returns 1."""
+    """Script emits a structured error envelope with non-zero exit.
+
+    TODO: tighten when ghost_check uses code=2 for missing input.
+    """
     r = run_script("ghost_check.py")
     assert r.returncode != 0
     payload = json.loads(r.stdout)

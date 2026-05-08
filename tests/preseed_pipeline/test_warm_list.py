@@ -160,7 +160,7 @@ def test_invalid_last_warm_touch_treated_as_never(
 def test_missing_pipeline_csv_emits_error_envelope(tmp_workspace, run_script):
     """Script emits a structured error envelope with non-zero exit.
 
-    Spec: missing-input should be exit 2; current script returns 1.
+    TODO: tighten when warm_list uses code=2 for missing input.
     """
     r = run_script("warm_list.py")
     assert r.returncode != 0

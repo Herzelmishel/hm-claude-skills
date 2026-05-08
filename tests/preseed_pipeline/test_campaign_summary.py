@@ -190,18 +190,15 @@ def test_empty_workspace_graceful_zeros(
 def test_missing_pipeline_csv_emits_error_envelope(
     tmp_workspace, run_script,
 ):
-    """Script emits a structured error envelope when pipeline.csv is missing.
-
-    Note: per the skill spec, missing-input should be exit 2; the current
-    script returns 1. We assert non-zero + envelope shape; if the script is
-    later fixed to use code=2, tighten this assertion.
-    """
+    """Script emits a structured error envelope with code=2 (missing input)."""
     r = run_script("campaign_summary.py")
-    assert r.returncode != 0
+    assert r.returncode == 2, r.stdout + r.stderr
     payload = json.loads(r.stdout)
     assert "pipeline.csv" in payload["error"]
     assert payload["fix"]
     assert payload["field"]
+    if "code" in payload:
+        assert payload["code"] == 2
 
 
 def test_momentum_score_rewards_recent_activity(
