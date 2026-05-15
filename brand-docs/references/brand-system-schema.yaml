@@ -1,0 +1,79 @@
+# Brand System Schema — Template
+# Copy this to ~/brand/brand-system.yaml and fill in your values.
+# All color values must be hex (#RRGGBB). All sizes are in points (pt).
+
+meta:
+  brand_name: ""           # e.g. "Acme Corp"
+  created: ""              # ISO date: YYYY-MM-DD
+  version: 1
+
+identity:
+  logo_path: "~/brand/assets/logo.png"
+  logo_alt: ""             # alt text for the logo
+  wordmark: ""             # the text version of your brand name
+
+colors:
+  h1: ""                   # main heading color (section titles)
+  h2: ""                   # subheading color
+  accent: ""               # italic subtitle, highlight, callout border
+  table_header_bg: ""      # table header row background
+  table_header_text: "#FFFFFF"
+  background: "#FFFFFF"
+  body_text: "#000000"
+  muted: ""                # footer, captions, secondary labels
+
+typography:
+  font: ""                 # single font for all text (e.g. "Calibri", "Arial")
+  h1_size: 14              # pt, bold
+  h2_size: 13              # pt, bold
+  body_size: 11            # pt, regular
+  footer_size: 9           # pt, regular
+  cover_title_size: 28     # pt, bold — the large centered title on the cover page
+  line_height: 1.15
+
+spacing:
+  margin_top: 72           # pt (72pt = 1 inch = ~2.54cm)
+  margin_bottom: 72
+  margin_left: 72
+  margin_right: 72
+  section_gap: 16          # pt between major sections
+  paragraph_gap: 8         # pt between paragraphs
+
+style:
+  tone: "professional"     # professional | bold | minimal | warm
+  numbering: true          # true = sections numbered "1. Title", false = unnumbered
+  cover_subtitle_italic: true
+  callout_style: "left-border"  # left-border | box | none
+
+layouts:
+  page_size: "A4"          # A4 | Letter
+  header:
+    enabled: true
+    left: "logo"           # logo | text | none
+    right: "doc_label"     # doc_label = "DOC NAME | Section | vX.X"
+    separator: true        # thin line below header
+  footer:
+    enabled: true
+    center: "Confidential. [Month Year]. | Page {N} of {TOTAL}"
+    font_size: 9
+    italic_confidential: true
+  cover_page:
+    logo_position: "top-left"
+    title_align: "center"
+    subtitle_align: "center"
+    doc_info_position: "bottom-center"
+
+tables:
+  header_bg: ""            # same as colors.table_header_bg
+  header_text: "#FFFFFF"
+  header_bold: true
+  row_bg: "#FFFFFF"
+  row_text: "#000000"
+  first_col_bold: true     # bold text in first column of each row
+
+never_do: []
+# Populate with your brand restrictions, e.g.:
+# - "mix fonts"
+# - "use gradients"
+# - "omit page header/footer"
+# - "center body text"
